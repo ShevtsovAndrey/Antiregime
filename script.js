@@ -7,33 +7,30 @@ async function updateConnectionStats() {
     const netEl = document.getElementById('info-net');
     const ipEl = document.getElementById('info-ip');
 
-    // Определение устройства
+    // Краткое определение устройства
     const ua = navigator.userAgent;
-    let device = "PC";
-    if (/android/i.test(ua)) device = "Android";
-    else if (/iPad|iPhone|iPod/.test(ua)) device = "iPhone/iOS";
-    deviceEl.innerHTML = `📱 <b>Dev:</b> ${device}`;
+    let dev = "PC";
+    if (/android/i.test(ua)) dev = "ANDR";
+    else if (/iPad|iPhone|iPod/.test(ua)) dev = "iOS";
+    deviceEl.innerHTML = `SYS: ${dev}`;
 
-    // Статус интернета (изменение цвета рамки)
+    // Статус сети
     if (navigator.onLine) {
-        infoBox.style.borderColor = '#68afaf';
-        if (navigator.connection) {
-            netEl.innerHTML = `🌐 <b>Net:</b> ${navigator.connection.effectiveType.toUpperCase()}`;
-        } else {
-            netEl.innerHTML = `🌐 <b>Net:</b> ON`;
-        }
+        const netType = navigator.connection ? navigator.connection.effectiveType.toUpperCase() : 'ON';
+        netEl.innerHTML = `NET: ${netType}`;
+        netEl.style.color = ""; // Сброс цвета
     } else {
-        infoBox.style.borderColor = '#f55';
-        netEl.innerHTML = `🌐 <b>Net:</b> <span style="color:#f55">OFFLINE</span>`;
+        netEl.innerHTML = `NET: OFFLINE`;
+        netEl.style.color = "#f55"; // Подсветка ошибки
     }
 
-    // IP адрес через API (защита от кэша для VPN)
+    // IP адрес
     try {
         const res = await fetch('https://api.ipify.org?format=json&t=' + Date.now());
         const data = await res.json();
-        ipEl.innerHTML = `📍 <b>IP:</b> ${data.ip}`;
+        ipEl.innerHTML = `IP: ${data.ip}`;
     } catch (e) {
-        ipEl.innerHTML = `📍 <b>IP:</b> Checking...`;
+        ipEl.innerHTML = `IP: ERR`;
     }
 }
 
@@ -116,35 +113,45 @@ function startPeer(id) {
 
 function setupConnection(conn) {
     connections[conn.peer] = conn;
-    refreshTabs();
-    checkPendingButton();
+    console.log("🛠 Настройка канала с:", conn.peer);
 
     conn.on('data', (data) => {
-        if (data.type === 'request-chat') { showIncomingAlert(conn, data); return; }
-        if (data.type === 'handshake-ok' || data.type === 'reconnect-ping') {
-            if (data.avatar) connections[conn.peer].peerAvatar = data.avatar;
-            if (data.type === 'handshake-ok') {
-                addSystemMessage(`Связь с ${conn.peer} установлена ✅`);
-                openChat(conn.peer); 
-            }
-            refreshTabs(); return;
+        // --- ВОТ ЭТОТ БЛОК ОЖИВЛЯЕТ УДАЛЕННЫЙ ЧАТ ---
+        let list = JSON.parse(localStorage.getItem('p2p_chat_list') || '[]');
+        if (!list.includes(conn.peer)) {
+            list.push(conn.peer);
+            localStorage.setItem('p2p_chat_list', JSON.stringify(list));
+            refreshTabs(); // Перерисовываем вкладки, чтобы чат появился
         }
-        if (data.type === 'typing') {
-            if (activePeerId === conn.peer) {
-                typingIndicator.style.opacity = data.isTyping ? "1" : "0";
-                typingIndicator.innerText = `${conn.peer} печатает...`;
-            }
+        // --------------------------------------------
+
+        if (data.type === 'request-chat') {
+            openChat(conn.peer); 
+            showIncomingAlert(conn, data);
             return;
         }
-        if (data.type === 'delete') { removeData(data.msgId); return; }
+        
+        // ... остальной код (reject, handshake, messages) ...
+        if (data.type === 'reject-chat') {
+            addSystemMessage(`🚫 Пользователь отклонил ваш запрос`);
+            setTimeout(() => { conn.close(); refreshTabs(); }, 1000);
+            return;
+        }
+
+        if (data.type === 'handshake-ok' || data.type === 'reconnect-ping') {
+            if (data.avatar) connections[conn.peer].peerAvatar = data.avatar;
+            addSystemMessage(`Связь установлена ✅`);
+            refreshTabs();
+            return;
+        }
+
         if (data.user) {
             let content = data.text || data.image || data.audio;
             saveMessage(data.user, content, 'peer-msg', data.msgId, !!data.isImage, !!data.isAudio, conn.peer, false);
             if (activePeerId === conn.peer) addMessage(data.user, content, 'peer-msg', data.msgId, !!data.isImage, !!data.isAudio);
-            else refreshTabs();
+            refreshTabs();
         }
     });
-    conn.on('close', () => refreshTabs());
 }
 
 // --- СООБЩЕНИЯ И ЧЕРНОВИКИ ---
@@ -246,16 +253,17 @@ function saveMessage(u, t, c, id, isImg, isAud, p, isP = false) {
 }
 
 function loadHistory() {
+    if (!chatWindow) return;
     chatWindow.innerHTML = '';
-    const inputArea = document.querySelector('.input-area'); // Убедись, что у тебя есть этот класс в HTML
+    
+    // Ищем блок ввода (обычно это контейнер с message-input и кнопкой)
+    const inputArea = document.querySelector('.input-area') || messageInput?.parentElement;
 
     if (!activePeerId) {
-        // Если чат не выбран — скрываем ввод и пишем подсказку
         if (inputArea) inputArea.style.display = 'none';
-        addSystemMessage("Выберите чат из списка слева или введите ID для подключения");
+        addSystemMessage("Выберите чат слева или введите ID для подключения");
         return;
     } else {
-        // Если чат выбран — показываем ввод
         if (inputArea) inputArea.style.display = 'flex';
     }
 
@@ -269,18 +277,29 @@ function loadHistory() {
 }
 
 function refreshTabs() {
+    if (!tabsContainer) return;
     tabsContainer.innerHTML = '';
+    
     let list = JSON.parse(localStorage.getItem('p2p_chat_list') || '[]');
+    
+    // Если списка нет, принудительно добавляем Архив
+    if (list.length === 0 || !list.includes('Архив')) {
+        list = ['Архив'];
+        localStorage.setItem('p2p_chat_list', JSON.stringify(list));
+    }
+
     list.forEach(id => {
         const isNotes = id === 'Архив';
         const isOnline = !isNotes && (connections[id] && connections[id].open);
+        
         const tab = document.createElement('div');
         tab.className = `tab ${id === activePeerId ? 'active' : ''}`;
         
-        // Для архива убираем точку и ставим иконку дискеты
+        // Рисуем статус: для Архива — дискета, для остальных — точка
         const statusHtml = isNotes ? '<span style="margin-left:5px">💾</span>' : `<span class="status-dot ${isOnline ? 'online' : ''}"></span>`;
         
-        tab.innerHTML = `${id} ${statusHtml}${isNotes ? '' : `<span class="close-tab" onclick="closeChat('${id}', event)">×</span>`}`;
+        tab.innerHTML = `<span>${id}</span> ${statusHtml}${isNotes ? '' : `<span class="close-tab" onclick="closeChat('${id}', event)">×</span>`}`;
+        
         tab.onclick = () => openChat(id);
         tabsContainer.appendChild(tab);
     });
@@ -289,15 +308,42 @@ function refreshTabs() {
 function connectToPeer() {
     const id = peerInput.value.trim();
     if (!id || id === myUserName || id === 'Архив') return;
-    addSystemMessage(`Подключение к ${id}...`);
+
+    // Сразу открываем вкладку, чтобы пользователь видел процесс
+    openChat(id);
+    addSystemMessage(`Отправляем исходящий запрос ID: ${id}...`);
+
     const conn = peer.connect(id, { reliable: true });
+
+    const connectionTimeout = setTimeout(() => {
+        if (!connections[id] || !connections[id].open) {
+            conn.close();
+            addSystemMessage(`❌ Ошибка: ${id} не отвечает (тайм-аут 10 сек)`);
+        }
+    }, 10000);
+
     conn.on('open', () => {
-        conn.send({ type: 'request-chat', from: myUserName, avatar: myAvatar });
-        setupConnection(conn);
+        clearTimeout(connectionTimeout);
+        setTimeout(() => {
+            if (conn.open) {
+                conn.send({ type: 'request-chat', from: myUserName, avatar: myAvatar });
+                setupConnection(conn);
+            }
+        }, 500);
     });
 }
 
-function openChat(pId) { activePeerId = pId; refreshTabs(); loadHistory(); }
+function openChat(pId) {
+    activePeerId = pId;
+    let list = JSON.parse(localStorage.getItem('p2p_chat_list') || '[]');
+    if (!list.includes(pId)) { 
+        list.push(pId); 
+        localStorage.setItem('p2p_chat_list', JSON.stringify(list)); 
+    }
+    refreshTabs(); 
+    loadHistory();
+}
+
 function addSystemMessage(t) { const d = document.createElement('div'); d.className = 'system-msg'; d.innerText = t; chatWindow.appendChild(d); chatWindow.scrollTop = chatWindow.scrollHeight; }
 
 // --- СЛУШАТЕЛИ СОБЫТИЙ ---
@@ -407,15 +453,33 @@ function restoreConnections() {
 function showIncomingAlert(conn, data) {
     const div = document.createElement('div');
     div.className = 'system-msg';
-    div.style.cssText = 'background: #424242; padding:15px; border:1px solid #68afaf; border-radius:8px; margin: 10px 0;';
-    div.innerHTML = `<div><b>${data.from}</b> хочет чат</div><div style="display:flex; gap:10px; justify-content:center; margin-top:10px;"><button id="acc-${data.from}" class="main-btn">Принять</button><button id="rej-${data.from}" class="main-btn" style="background:#f55; color:white;">Нет</button></div>`;
-    chatWindow.prepend(div);
+    div.style.cssText = 'background: #333; padding:15px; border:1px solid var(--accent); border-radius:12px; margin: 10px 0; color: white;';
+    
+    div.innerHTML = `
+        <div style="margin-bottom:10px;"><b>${data.from}</b> хочет начать переписку</div>
+        <div style="display:flex; gap:10px; justify-content:center;">
+            <button id="acc-${data.from}" class="main-btn" style="flex:1">Принять</button>
+            <button id="rej-${data.from}" class="main-btn" style="flex:1; background:#f55; color:white;">Нет</button>
+        </div>`;
+    
+    chatWindow.appendChild(div);
+    chatWindow.scrollTop = chatWindow.scrollHeight;
+
     document.getElementById(`acc-${data.from}`).onclick = () => {
         if (data.avatar) connections[conn.peer].peerAvatar = data.avatar;
         conn.send({ type: 'handshake-ok', from: myUserName, avatar: myAvatar });
-        div.remove(); openChat(conn.peer);
+        div.innerHTML = "Запрос принят ✅";
+        setTimeout(() => div.remove(), 2000);
     };
-    document.getElementById(`rej-${data.from}`).onclick = () => { conn.close(); div.remove(); };
+
+    document.getElementById(`rej-${data.from}`).onclick = () => {
+        conn.send({ type: 'reject-chat' });
+        div.innerHTML = "Вы отклонили запрос 🚫";
+        setTimeout(() => {
+            div.remove();
+            closeChat(conn.peer, {stopPropagation: () => {}}); // Закрываем вкладку
+        }, 1500);
+    };
 }
 
 function sendTypingStatus() {
@@ -427,13 +491,26 @@ function sendTypingStatus() {
 }
 
 function closeChat(id, e) {
-    e.stopPropagation();
-    if (confirm(`Удалить чат с ${id}?`)) {
-        if (connections[id]) { connections[id].close(); delete connections[id]; }
+    if (e && e.stopPropagation) e.stopPropagation();
+    
+    // Если это программный вызов (без e), либо пользователь подтвердил удаление
+    if (!e || confirm(`Удалить чат с ${id}?`)) {
+        // Обязательно полностью разрываем соединение
+        if (connections[id]) { 
+            connections[id].close(); 
+            delete connections[id]; 
+        }
+        
         let list = JSON.parse(localStorage.getItem('p2p_chat_list') || '[]');
         localStorage.setItem('p2p_chat_list', JSON.stringify(list.filter(i => i !== id)));
-        if (activePeerId === id) { activePeerId = null; chatWindow.innerHTML = ''; }
-        refreshTabs(); loadHistory();
+        
+        if (activePeerId === id) { 
+            activePeerId = null; 
+            chatWindow.innerHTML = ''; 
+        }
+        
+        refreshTabs(); 
+        loadHistory();
     }
 }
 
