@@ -66,7 +66,10 @@ initNotes();
 
 // --- СЕТЕВОЕ ЯДРО (PeerJS + Реконнект) ---
 function startPeer(id) {
-    if (peer) { peer.destroy(); }
+    if (peer) { 
+        peer.removeAllListeners(); // Очищаем старые события перед созданием нового
+        peer.destroy(); 
+    }
     
     peer = new Peer(id, {
         host: '0.peerjs.com',
@@ -85,28 +88,28 @@ function startPeer(id) {
         }
     });
 
+    // ВАЖНО: Этот блок отвечает за ВХОДЯЩИЕ вызовы
+    peer.on('connection', (conn) => {
+        console.log('Входящий запрос от:', conn.peer);
+        // Сразу подписываемся на данные, чтобы не пропустить handshake
+        setupConnection(conn);
+    });
+
     peer.on('open', (newId) => { 
-        console.log('Подключено. Ваш ID:', newId);
         addSystemMessage(`Вы онлайн: ${newId}`); 
         refreshTabs(); 
         restoreConnections(); 
     });
 
-    peer.on('connection', (conn) => setupConnection(conn));
-
-    // Авто-реконнект при смене сети или VPN
     peer.on('disconnected', () => {
         console.log('Связь с сервером потеряна. Переподключение...');
         peer.reconnect();
     });
 
     peer.on('error', (err) => { 
-        console.error('Ошибка PeerJS:', err.type);
+        console.error('PeerJS Error:', err.type);
         if (err.type === 'network' || err.type === 'server-error') {
             setTimeout(() => startPeer(myUserName), 5000);
-        }
-        if (err.type === 'peer-unavailable') {
-            addSystemMessage("ID не в сети. Проверьте VPN или ник.");
         }
     });
 }
@@ -217,11 +220,21 @@ function addMessage(user, content, className, id, isImg, isAud) {
     const div = document.createElement('div');
     div.className = `msg ${className}`;
     if (id) div.setAttribute('data-id', id);
-    let av = (className.includes('peer-msg') ? connections[activePeerId]?.peerAvatar : myAvatar);
-    let avHtml = av ? `<img src="${av}" class="avatar-mini">` : `<span class="avatar-mini">👤</span>`;
+
+    // Определяем аватарку
+    let avHtml;
+    if (activePeerId === 'Архив') {
+        avHtml = `<span class="avatar-mini">💾</span>`;
+    } else {
+        let av = (className.includes('peer-msg') ? connections[activePeerId]?.peerAvatar : myAvatar);
+        avHtml = av ? `<img src="${av}" class="avatar-mini">` : `<span class="avatar-mini">👤</span>`;
+    }
+    
     let body = isImg ? `<img src="${content}" class="chat-img" onclick="window.openLightbox('${content}')">` : (isAud ? `<audio controls src="${content}"></audio>` : content);
+    
     div.innerHTML = `<b>${avHtml}${user}:</b> ${body}`;
     if (id) div.innerHTML += `<br><span style="font-size:9px; cursor:pointer; color:#888;" onclick="window.deleteMsg(${id})">Удалить</span>`;
+    
     chatWindow.appendChild(div);
     chatWindow.scrollTop = chatWindow.scrollHeight;
 }
@@ -234,7 +247,18 @@ function saveMessage(u, t, c, id, isImg, isAud, p, isP = false) {
 
 function loadHistory() {
     chatWindow.innerHTML = '';
-    if (!activePeerId) return;
+    const inputArea = document.querySelector('.input-area'); // Убедись, что у тебя есть этот класс в HTML
+
+    if (!activePeerId) {
+        // Если чат не выбран — скрываем ввод и пишем подсказку
+        if (inputArea) inputArea.style.display = 'none';
+        addSystemMessage("Выберите чат из списка слева или введите ID для подключения");
+        return;
+    } else {
+        // Если чат выбран — показываем ввод
+        if (inputArea) inputArea.style.display = 'flex';
+    }
+
     let hist = JSON.parse(localStorage.getItem('p2p_history') || '[]');
     hist.filter(m => m.chatWith === activePeerId).forEach(m => {
         let fullClass = m.className;
@@ -252,7 +276,11 @@ function refreshTabs() {
         const isOnline = !isNotes && (connections[id] && connections[id].open);
         const tab = document.createElement('div');
         tab.className = `tab ${id === activePeerId ? 'active' : ''}`;
-        tab.innerHTML = `${id} <span class="status-dot ${isOnline ? 'online' : ''}"></span>${isNotes ? '' : `<span class="close-tab" onclick="closeChat('${id}', event)">×</span>`}`;
+        
+        // Для архива убираем точку и ставим иконку дискеты
+        const statusHtml = isNotes ? '<span style="margin-left:5px">💾</span>' : `<span class="status-dot ${isOnline ? 'online' : ''}"></span>`;
+        
+        tab.innerHTML = `${id} ${statusHtml}${isNotes ? '' : `<span class="close-tab" onclick="closeChat('${id}', event)">×</span>`}`;
         tab.onclick = () => openChat(id);
         tabsContainer.appendChild(tab);
     });
@@ -408,3 +436,6 @@ function closeChat(id, e) {
         refreshTabs(); loadHistory();
     }
 }
+
+// Скрываем ввод при старте, так как чат еще не выбран
+loadHistory();
