@@ -1,47 +1,53 @@
- // Определение устройства с которого подключились
+// --- БЛОК МОНИТОРИНГА (УСТРОЙСТВО, СЕТЬ, IP) ---
 async function updateConnectionStats() {
+    const infoBox = document.getElementById('connection-info');
+    if (!infoBox) return;
+
     const deviceEl = document.getElementById('info-device');
     const netEl = document.getElementById('info-net');
     const ipEl = document.getElementById('info-ip');
 
-    // 1. Определение устройства
+    // Определение устройства
     const ua = navigator.userAgent;
-    let device = "Неизвестное устройство";
+    let device = "PC";
     if (/android/i.test(ua)) device = "Android";
-    else if (/iPad|iPhone|iPod/.test(ua)) device = "iOS";
-    else if (/Windows/i.test(ua)) device = "Windows";
-    deviceEl.innerText = `📱 Dev: ${device}`;
+    else if (/iPad|iPhone|iPod/.test(ua)) device = "iPhone/iOS";
+    deviceEl.innerHTML = `📱 <b>Dev:</b> ${device}`;
 
-    // 2. Определение сети (Тип соединения)
-    if (navigator.connection) {
-        const conn = navigator.connection;
-        const type = conn.effectiveType || "unknown"; // 4g, 3g, etc.
-        const saveData = conn.saveData ? " (Data Saver)" : "";
-        netEl.innerText = `🌐 Net: ${type.toUpperCase()}${saveData}`;
+    // Статус интернета (изменение цвета рамки)
+    if (navigator.onLine) {
+        infoBox.style.borderColor = '#68afaf';
+        if (navigator.connection) {
+            netEl.innerHTML = `🌐 <b>Net:</b> ${navigator.connection.effectiveType.toUpperCase()}`;
+        } else {
+            netEl.innerHTML = `🌐 <b>Net:</b> ON`;
+        }
     } else {
-        netEl.innerText = `🌐 Net: Browser limited`;
+        infoBox.style.borderColor = '#f55';
+        netEl.innerHTML = `🌐 <b>Net:</b> <span style="color:#f55">OFFLINE</span>`;
     }
 
-    // 3. Получение IP адреса (через внешний API)
+    // IP адрес через API (защита от кэша для VPN)
     try {
-        const response = await fetch('https://api.ipify.org?format=json');
-        const data = await response.json();
-        ipEl.innerText = `📍 IP: ${data.ip}`;
+        const res = await fetch('https://api.ipify.org?format=json&t=' + Date.now());
+        const data = await res.json();
+        ipEl.innerHTML = `📍 <b>IP:</b> ${data.ip}`;
     } catch (e) {
-        ipEl.innerText = `📍 IP: Ошибка получения IP`;
+        ipEl.innerHTML = `📍 <b>IP:</b> Checking...`;
     }
 }
 
-// Запускаем обновление при загрузке
+// Запуск мониторинга
+setInterval(updateConnectionStats, 8000);
 updateConnectionStats();
 
+// --- ПЕРЕМЕННЫЕ И ИНИЦИАЛИЗАЦИЯ ---
 let peer, mediaRecorder, typingTimer;
 let connections = {}; 
 let activePeerId = null; 
 let audioChunks = [];
 let isRecording = false;
 
-// Инициализация данных
 let myUserName = localStorage.getItem('p2p_nickname') || "User_" + Math.floor(Math.random() * 1000);
 let myAvatar = localStorage.getItem('p2p_avatar') || null;
 
@@ -56,13 +62,133 @@ if (myAvatar) updateAvatarPreview(myAvatar);
 
 // Старт
 startPeer(myUserName);
-initNotes(); // Создаем локальную вкладку
+initNotes();
 
-// --- СЛУШАТЕЛИ КЛАВИАТУРЫ ---
-messageInput.addEventListener("keypress", (e) => { if (e.key === "Enter") sendMessage(); });
-peerInput.addEventListener("keypress", (e) => { if (e.key === "Enter") connectToPeer(); });
+// --- СЕТЕВОЕ ЯДРО (PeerJS + Реконнект) ---
+function startPeer(id) {
+    if (peer) { peer.destroy(); }
+    
+    peer = new Peer(id, {
+        host: '0.peerjs.com',
+        port: 443,
+        secure: true,
+        debug: 1,
+        config: {
+            'iceServers': [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' },
+                { urls: 'stun:stun2.l.google.com:19302' },
+                { urls: 'stun:stun3.l.google.com:19302' },
+                { urls: 'stun:stun4.l.google.com:19302' }
+            ],
+            'iceCandidatePoolSize': 10
+        }
+    });
 
-// Вкладка "Заметки" (всегда первая)
+    peer.on('open', (newId) => { 
+        console.log('Подключено. Ваш ID:', newId);
+        addSystemMessage(`Вы онлайн: ${newId}`); 
+        refreshTabs(); 
+        restoreConnections(); 
+    });
+
+    peer.on('connection', (conn) => setupConnection(conn));
+
+    // Авто-реконнект при смене сети или VPN
+    peer.on('disconnected', () => {
+        console.log('Связь с сервером потеряна. Переподключение...');
+        peer.reconnect();
+    });
+
+    peer.on('error', (err) => { 
+        console.error('Ошибка PeerJS:', err.type);
+        if (err.type === 'network' || err.type === 'server-error') {
+            setTimeout(() => startPeer(myUserName), 5000);
+        }
+        if (err.type === 'peer-unavailable') {
+            addSystemMessage("ID не в сети. Проверьте VPN или ник.");
+        }
+    });
+}
+
+function setupConnection(conn) {
+    connections[conn.peer] = conn;
+    refreshTabs();
+    checkPendingButton();
+
+    conn.on('data', (data) => {
+        if (data.type === 'request-chat') { showIncomingAlert(conn, data); return; }
+        if (data.type === 'handshake-ok' || data.type === 'reconnect-ping') {
+            if (data.avatar) connections[conn.peer].peerAvatar = data.avatar;
+            if (data.type === 'handshake-ok') {
+                addSystemMessage(`Связь с ${conn.peer} установлена ✅`);
+                openChat(conn.peer); 
+            }
+            refreshTabs(); return;
+        }
+        if (data.type === 'typing') {
+            if (activePeerId === conn.peer) {
+                typingIndicator.style.opacity = data.isTyping ? "1" : "0";
+                typingIndicator.innerText = `${conn.peer} печатает...`;
+            }
+            return;
+        }
+        if (data.type === 'delete') { removeData(data.msgId); return; }
+        if (data.user) {
+            let content = data.text || data.image || data.audio;
+            saveMessage(data.user, content, 'peer-msg', data.msgId, !!data.isImage, !!data.isAudio, conn.peer, false);
+            if (activePeerId === conn.peer) addMessage(data.user, content, 'peer-msg', data.msgId, !!data.isImage, !!data.isAudio);
+            else refreshTabs();
+        }
+    });
+    conn.on('close', () => refreshTabs());
+}
+
+// --- СООБЩЕНИЯ И ЧЕРНОВИКИ ---
+function sendMessage() {
+    const text = messageInput.value.trim();
+    if (!text || !activePeerId) return;
+    const id = Date.now();
+
+    if (activePeerId === 'Архив') {
+        addMessage('Я', text, 'my-msg', id, false, false);
+        saveMessage('Я', text, 'my-msg', id, false, false, activePeerId, false);
+    } else {
+        const conn = connections[activePeerId];
+        if (conn && conn.open) {
+            addMessage('Я', text, 'my-msg', id, false, false);
+            saveMessage('Я', text, 'my-msg', id, false, false, activePeerId, false);
+            conn.send({ user: myUserName, text: text, msgId: id });
+        } else {
+            addMessage('Я', text, 'my-msg pending-msg', id, false, false);
+            saveMessage('Я', text, 'my-msg', id, false, false, activePeerId, true);
+            checkPendingButton();
+        }
+    }
+    messageInput.value = '';
+}
+
+function sendPendingMessages() {
+    const conn = connections[activePeerId];
+    if (!conn || !conn.open) return;
+    let hist = JSON.parse(localStorage.getItem('p2p_history') || '[]');
+    hist.forEach(m => {
+        if (m.chatWith === activePeerId && m.isPending) {
+            conn.send({ 
+                user: myUserName, 
+                text: m.isImage || m.isAudio ? null : m.text,
+                image: m.isImage ? m.text : null,
+                audio: m.isAudio ? m.text : null,
+                isImage: m.isImage, isAudio: m.isAudio, msgId: m.id 
+            });
+            m.isPending = false;
+        }
+    });
+    localStorage.setItem('p2p_history', JSON.stringify(hist));
+    loadHistory();
+}
+
+// --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
 function initNotes() {
     let list = JSON.parse(localStorage.getItem('p2p_chat_list') || '[]');
     if (!list.includes('Архив')) {
@@ -72,140 +198,11 @@ function initNotes() {
     refreshTabs();
 }
 
-function startPeer(id) {
-    if (peer) { 
-        peer.destroy(); 
-    }
-    
-    // Настройки специально для GitHub Pages (HTTPS)
-    peer = new Peer(id, {
-        host: '0.peerjs.com', // Используем официальный облачный сервер
-        port: 443,
-        secure: true,         // Обязательно true для работы по HTTPS
-        debug: 1,             // 1 - только ошибки, 3 - полный лог в консоли
-        config: {
-            'iceServers': [
-                { urls: 'stun:stun.l.google.com:19302' }, // Помогает обходить NAT и роутеры
-                { urls: 'stun:stun1.l.google.com:19302' }
-            ]
-        }
-    });
-
-    peer.on('open', (newId) => { 
-        console.log('Подключено к серверу сигнализации. Ваш ID:', newId);
-        addSystemMessage(`Ваш ник: ${newId}`); 
-        refreshTabs(); 
-        restoreConnections(); 
-    });
-
-    peer.on('connection', (conn) => {
-        console.log('Запрос подключения от:', conn.peer);
-        setupConnection(conn);
-    });
-
-    peer.on('error', (err) => { 
-        console.error('Ошибка PeerJS:', err.type, err);
-        if (err.type === 'unavailable-id') alert("ID уже используется на сервере."); 
-        if (err.type === 'peer-unavailable') addSystemMessage("ID не в сети");
-        if (err.type === 'network') addSystemMessage("Проблема подключения");
-    });
-}
-
-function setupConnection(conn) {
-    connections[conn.peer] = conn;
-    refreshTabs();
-    checkPendingButton(); // Проверяем черновики при подключении
-
-    conn.on('data', (data) => {
-        if (data.type === 'request-chat') { showIncomingAlert(conn, data); return; }
-        
-        if (data.type === 'handshake-ok' || data.type === 'reconnect-ping') {
-            if (data.avatar) connections[conn.peer].peerAvatar = data.avatar;
-            if (data.type === 'handshake-ok') {
-                addSystemMessage(`Связь с ${conn.peer} установлена ✅`);
-                openChat(conn.peer); 
-            }
-            refreshTabs(); return;
-        }
-
-        if (data.type === 'typing') {
-            if (activePeerId === conn.peer) {
-                typingIndicator.style.opacity = data.isTyping ? "1" : "0";
-                typingIndicator.innerText = `${conn.peer} печатает...`;
-            }
-            return;
-        }
-
-        if (data.type === 'delete') { removeData(data.msgId); return; }
-
-        if (data.user) {
-            let content = data.text || data.image || data.audio;
-            saveMessage(data.user, content, 'peer-msg', data.msgId, !!data.isImage, !!data.isAudio, conn.peer, false);
-            if (activePeerId === conn.peer) addMessage(data.user, content, 'peer-msg', data.msgId, !!data.isImage, !!data.isAudio);
-            else refreshTabs();
-        }
-    });
-
-    conn.on('close', () => { refreshTabs(); });
-}
-
-// --- СООБЩЕНИЯ ---
-
-function sendMessage() {
-    const text = messageInput.value.trim();
-    if (!text || !activePeerId) return;
-
-    const id = Date.now();
-    // Если это заметки - просто сохраняем локально
-    if (activePeerId === 'Архив') {
-        addMessage('Я', text, 'my-msg', id, false, false);
-        saveMessage('Я', text, 'my-msg', id, false, false, activePeerId, false);
-        messageInput.value = ''; return;
-    }
-
-    const conn = connections[activePeerId];
-    if (conn && conn.open) {
-        addMessage('Я', text, 'my-msg', id, false, false);
-        saveMessage('Я', text, 'my-msg', id, false, false, activePeerId, false);
-        conn.send({ user: myUserName, text: text, msgId: id });
-    } else {
-        addMessage('Я', text, 'my-msg pending-msg', id, false, false);
-        saveMessage('Я', text, 'my-msg', id, false, false, activePeerId, true);
-        checkPendingButton();
-    }
-    messageInput.value = '';
-}
-
-function sendPendingMessages() {
-    const conn = connections[activePeerId];
-    if (!conn || !conn.open) return;
-
-    let hist = JSON.parse(localStorage.getItem('p2p_history') || '[]');
-    hist.forEach(m => {
-        if (m.chatWith === activePeerId && m.isPending) {
-            conn.send({ 
-                user: myUserName, 
-                text: m.isImage || m.isAudio ? null : m.text,
-                image: m.isImage ? m.text : null,
-                audio: m.isAudio ? m.text : null,
-                isImage: m.isImage,
-                isAudio: m.isAudio,
-                msgId: m.id 
-            });
-            m.isPending = false;
-        }
-    });
-    localStorage.setItem('p2p_history', JSON.stringify(hist));
-    loadHistory();
-}
-
 function checkPendingButton() {
     const oldBtn = document.getElementById('send-pending-btn');
     if (oldBtn) oldBtn.remove();
-
     let hist = JSON.parse(localStorage.getItem('p2p_history') || '[]');
     const hasPending = hist.some(m => m.chatWith === activePeerId && m.isPending);
-    
     if (hasPending && connections[activePeerId]?.open) {
         const btn = document.createElement('button');
         btn.id = 'send-pending-btn';
@@ -220,22 +217,14 @@ function addMessage(user, content, className, id, isImg, isAud) {
     const div = document.createElement('div');
     div.className = `msg ${className}`;
     if (id) div.setAttribute('data-id', id);
-
     let av = (className.includes('peer-msg') ? connections[activePeerId]?.peerAvatar : myAvatar);
-    let avHtml = av ? `<img src="${av}" class="avatar-mini">` : `<span class="avatar-mini" style="background:#555; display:inline-block; text-align:center; line-height:22px;">👤</span>`;
-    
-    let body = content;
-    if (isImg) body = `<img src="${content}" class="chat-img" onclick="window.openLightbox('${content}')">`;
-    else if (isAud) body = `<audio controls src="${content}" style="max-width:100%"></audio>`;
-
+    let avHtml = av ? `<img src="${av}" class="avatar-mini">` : `<span class="avatar-mini">👤</span>`;
+    let body = isImg ? `<img src="${content}" class="chat-img" onclick="window.openLightbox('${content}')">` : (isAud ? `<audio controls src="${content}"></audio>` : content);
     div.innerHTML = `<b>${avHtml}${user}:</b> ${body}`;
     if (id) div.innerHTML += `<br><span style="font-size:9px; cursor:pointer; color:#888;" onclick="window.deleteMsg(${id})">Удалить</span>`;
-    
     chatWindow.appendChild(div);
     chatWindow.scrollTop = chatWindow.scrollHeight;
 }
-
-// --- СЕРВИСНЫЕ ФУНКЦИИ ---
 
 function saveMessage(u, t, c, id, isImg, isAud, p, isP = false) {
     let hist = JSON.parse(localStorage.getItem('p2p_history') || '[]');
@@ -255,16 +244,6 @@ function loadHistory() {
     checkPendingButton();
 }
 
-function openChat(pId) {
-    activePeerId = pId;
-    let list = JSON.parse(localStorage.getItem('p2p_chat_list') || '[]');
-    if (!list.includes(pId)) { 
-        list.push(pId); 
-        localStorage.setItem('p2p_chat_list', JSON.stringify(list)); 
-    }
-    refreshTabs(); loadHistory();
-}
-
 function refreshTabs() {
     tabsContainer.innerHTML = '';
     let list = JSON.parse(localStorage.getItem('p2p_chat_list') || '[]');
@@ -273,40 +252,48 @@ function refreshTabs() {
         const isOnline = !isNotes && (connections[id] && connections[id].open);
         const tab = document.createElement('div');
         tab.className = `tab ${id === activePeerId ? 'active' : ''}`;
-        tab.innerHTML = `${id} <span class="status-dot ${isOnline ? 'online' : ''}"></span>
-            ${isNotes ? '' : `<span class="close-tab" onclick="closeChat('${id}', event)">×</span>`}`;
+        tab.innerHTML = `${id} <span class="status-dot ${isOnline ? 'online' : ''}"></span>${isNotes ? '' : `<span class="close-tab" onclick="closeChat('${id}', event)">×</span>`}`;
         tab.onclick = () => openChat(id);
         tabsContainer.appendChild(tab);
     });
 }
 
-function closeChat(id, e) {
-    e.stopPropagation();
-    if (confirm(`Удалить чат с ${id}?`)) {
-        if (connections[id]) { connections[id].close(); delete connections[id]; }
-        let list = JSON.parse(localStorage.getItem('p2p_chat_list') || '[]');
-        localStorage.setItem('p2p_chat_list', JSON.stringify(list.filter(i => i !== id)));
-        if (activePeerId === id) { activePeerId = null; chatWindow.innerHTML = ''; }
-        refreshTabs();
-    }
+function connectToPeer() {
+    const id = peerInput.value.trim();
+    if (!id || id === myUserName || id === 'Архив') return;
+    addSystemMessage(`Подключение к ${id}...`);
+    const conn = peer.connect(id, { reliable: true });
+    conn.on('open', () => {
+        conn.send({ type: 'request-chat', from: myUserName, avatar: myAvatar });
+        setupConnection(conn);
+    });
 }
 
-function changeMyId() {
-    const inputId = document.getElementById('my-id-input').value.trim();
-    if (!inputId) return;
-    myUserName = inputId;
-    localStorage.setItem('p2p_nickname', myUserName);
-    startPeer(myUserName);
+function openChat(pId) { activePeerId = pId; refreshTabs(); loadHistory(); }
+function addSystemMessage(t) { const d = document.createElement('div'); d.className = 'system-msg'; d.innerText = t; chatWindow.appendChild(d); chatWindow.scrollTop = chatWindow.scrollHeight; }
+
+// --- СЛУШАТЕЛИ СОБЫТИЙ ---
+messageInput.addEventListener("keypress", (e) => { if (e.key === "Enter") sendMessage(); });
+peerInput.addEventListener("keypress", (e) => { if (e.key === "Enter") connectToPeer(); });
+
+function changeMyId() { myUserName = document.getElementById('my-id-input').value.trim(); localStorage.setItem('p2p_nickname', myUserName); startPeer(myUserName); }
+function updateAvatarPreview(src) { document.getElementById('my-avatar-preview').innerHTML = `<img src="${src}">`; }
+window.openLightbox = (src) => { document.getElementById('lightbox-img').src = src; document.getElementById('lightbox').classList.add('open'); };
+window.deleteMsg = (id) => { removeData(id); if (connections[activePeerId]) connections[activePeerId].send({ type: 'delete', msgId: id }); };
+
+function removeData(id) { 
+    const el = document.querySelector(`[data-id="${id}"]`); if (el) el.remove();
+    let hist = JSON.parse(localStorage.getItem('p2p_history') || '[]');
+    localStorage.setItem('p2p_history', JSON.stringify(hist.filter(m => m.id != id)));
 }
 
+// Функции медиа и прочие вспомогательные...
 function uploadAvatar(input) {
     const file = input.files[0];
     resizeImage(file, 100, 100, 0.6, (b64) => {
         myAvatar = b64; localStorage.setItem('p2p_avatar', b64);
         updateAvatarPreview(b64);
-        for (let id in connections) {
-            if (connections[id].open) connections[id].send({ type: 'handshake-ok', avatar: b64, from: myUserName });
-        }
+        for (let id in connections) { if (connections[id].open) connections[id].send({ type: 'handshake-ok', avatar: b64, from: myUserName }); }
     });
 }
 
@@ -315,11 +302,10 @@ function uploadChatImage(input) {
     if (!file || !activePeerId) return;
     resizeImage(file, 800, 800, 0.7, (b64) => {
         const id = Date.now();
-        const conn = connections[activePeerId];
-        if (conn && conn.open) {
+        if (connections[activePeerId]?.open) {
             addMessage('Я', b64, 'my-msg', id, true, false);
             saveMessage('Я', b64, 'my-msg', id, true, false, activePeerId, false);
-            conn.send({ user: myUserName, image: b64, isImage: true, msgId: id });
+            connections[activePeerId].send({ user: myUserName, image: b64, isImage: true, msgId: id });
         } else {
             addMessage('Я', b64, 'my-msg pending-msg', id, true, false);
             saveMessage('Я', b64, 'my-msg', id, true, false, activePeerId, true);
@@ -340,15 +326,13 @@ async function toggleRecording() {
             mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
             mediaRecorder.onstop = () => {
                 const blob = new Blob(audioChunks, { type: 'audio/ogg' });
-                const reader = new FileReader();
-                reader.readAsDataURL(blob);
+                const reader = new FileReader(); reader.readAsDataURL(blob);
                 reader.onloadend = () => {
                     const b64 = reader.result; const id = Date.now();
-                    const conn = connections[activePeerId];
-                    if (conn && conn.open) {
+                    if (connections[activePeerId]?.open) {
                         addMessage('Я', b64, 'my-msg', id, false, true);
                         saveMessage('Я', b64, 'my-msg', id, false, true, activePeerId, false);
-                        conn.send({ user: myUserName, audio: b64, isAudio: true, msgId: id });
+                        connections[activePeerId].send({ user: myUserName, audio: b64, isAudio: true, msgId: id });
                     } else {
                         addMessage('Я', b64, 'my-msg pending-msg', id, false, true);
                         saveMessage('Я', b64, 'my-msg', id, false, true, activePeerId, true);
@@ -359,9 +343,7 @@ async function toggleRecording() {
             };
             mediaRecorder.start(); isRecording = true; btn.classList.add('recording');
         } catch(e) { alert("Микрофон недоступен"); }
-    } else {
-        mediaRecorder.stop(); isRecording = false; btn.classList.remove('recording');
-    }
+    } else { mediaRecorder.stop(); isRecording = false; btn.classList.remove('recording'); }
 }
 
 function resizeImage(file, maxW, maxH, q, cb) {
@@ -371,8 +353,7 @@ function resizeImage(file, maxW, maxH, q, cb) {
         img.onload = () => {
             const canvas = document.createElement('canvas');
             let w = img.width, h = img.height;
-            if (w > h) { if (w > maxW) { h *= maxW / w; w = maxW; } } 
-            else { if (h > maxH) { w *= maxH / h; h = maxH; } }
+            if (w > h) { if (w > maxW) { h *= maxW / w; w = maxW; } } else { if (h > maxH) { w *= maxH / h; h = maxH; } }
             canvas.width = w; canvas.height = h;
             canvas.getContext('2d').drawImage(img, 0, 0, w, h);
             cb(canvas.toDataURL('image/jpeg', q));
@@ -385,12 +366,13 @@ function resizeImage(file, maxW, maxH, q, cb) {
 function restoreConnections() {
     let list = JSON.parse(localStorage.getItem('p2p_chat_list') || '[]');
     list.forEach(id => {
-        if (id === 'Архив') return;
-        const conn = peer.connect(id);
-        conn.on('open', () => {
-            conn.send({ type: 'reconnect-ping', from: myUserName, avatar: myAvatar });
-            setupConnection(conn);
-        });
+        if (id !== 'Архив' && !connections[id]) {
+            const conn = peer.connect(id);
+            conn.on('open', () => {
+                conn.send({ type: 'reconnect-ping', from: myUserName, avatar: myAvatar });
+                setupConnection(conn);
+            });
+        }
     });
 }
 
@@ -398,12 +380,7 @@ function showIncomingAlert(conn, data) {
     const div = document.createElement('div');
     div.className = 'system-msg';
     div.style.cssText = 'background: #424242; padding:15px; border:1px solid #68afaf; border-radius:8px; margin: 10px 0;';
-    const guestAv = data.avatar ? `<img src="${data.avatar}" class="avatar-mini">` : '👤';
-    div.innerHTML = `<div>${guestAv} <b>${data.from}</b> хочет чат</div>
-        <div style="display:flex; gap:10px; justify-content:center; margin-top:10px;">
-            <button id="acc-${data.from}" class="main-btn">Принять</button>
-            <button id="rej-${data.from}" class="main-btn" style="background:#f55; color:white;">Нет</button>
-        </div>`;
+    div.innerHTML = `<div><b>${data.from}</b> хочет чат</div><div style="display:flex; gap:10px; justify-content:center; margin-top:10px;"><button id="acc-${data.from}" class="main-btn">Принять</button><button id="rej-${data.from}" class="main-btn" style="background:#f55; color:white;">Нет</button></div>`;
     chatWindow.prepend(div);
     document.getElementById(`acc-${data.from}`).onclick = () => {
         if (data.avatar) connections[conn.peer].peerAvatar = data.avatar;
@@ -421,17 +398,13 @@ function sendTypingStatus() {
     }
 }
 
-function addSystemMessage(t) {
-    const d = document.createElement('div'); d.className = 'system-msg'; d.innerText = t;
-    chatWindow.appendChild(d); chatWindow.scrollTop = chatWindow.scrollHeight;
-}
-
-function updateAvatarPreview(src) { document.getElementById('my-avatar-preview').innerHTML = `<img src="${src}">`; }
-window.openLightbox = (src) => { document.getElementById('lightbox-img').src = src; document.getElementById('lightbox').classList.add('open'); };
-window.deleteMsg = (id) => { removeData(id); if (connections[activePeerId]) connections[activePeerId].send({ type: 'delete', msgId: id }); };
-
-function removeData(id) {
-    const el = document.querySelector(`[data-id="${id}"]`); if (el) el.remove();
-    let hist = JSON.parse(localStorage.getItem('p2p_history') || '[]');
-    localStorage.setItem('p2p_history', JSON.stringify(hist.filter(m => m.id != id)));
+function closeChat(id, e) {
+    e.stopPropagation();
+    if (confirm(`Удалить чат с ${id}?`)) {
+        if (connections[id]) { connections[id].close(); delete connections[id]; }
+        let list = JSON.parse(localStorage.getItem('p2p_chat_list') || '[]');
+        localStorage.setItem('p2p_chat_list', JSON.stringify(list.filter(i => i !== id)));
+        if (activePeerId === id) { activePeerId = null; chatWindow.innerHTML = ''; }
+        refreshTabs(); loadHistory();
+    }
 }
