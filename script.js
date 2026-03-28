@@ -54,9 +54,26 @@ function init() {
     openChat('Архив');
 }
 
+// --- ОБНОВЛЕННАЯ ФУНКЦИЯ ИНИЦИАЛИЗАЦИИ PEER ---
 function startPeer(id) {
     if (peer) { peer.off('connection'); peer.destroy(); }
-    peer = new Peer(id, { host: '0.peerjs.com', port: 443, secure: true, debug: 1 });
+
+    // Используем бесплатные STUN-серверы Google для пробивки NAT
+    const config = {
+        host: '0.peerjs.com',
+        port: 443,
+        secure: true,
+        debug: 1,
+        config: {
+            'iceServers': [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' },
+                { urls: 'stun:stun2.l.google.com:19302' }
+            ]
+        }
+    };
+
+    peer = new Peer(id, config);
 
     peer.on('connection', (conn) => {
         setupConnection(conn); 
@@ -69,7 +86,10 @@ function startPeer(id) {
 
     peer.on('error', (err) => {
         if (err.type === 'id-taken') alert('Этот ник занят!');
-        console.error(err);
+        if (err.type === 'peer-unavailable') {
+            addSystemMessage(`Ошибка: Собеседник не найден или оффлайн`);
+        }
+        console.error('PeerJS Error:', err.type, err);
     });
 }
 
@@ -103,7 +123,12 @@ function setupConnection(conn) {
 
         if (data.type === 'typing') {
             if (activePeerId === conn.peer) {
-                typingIndicator.style.opacity = data.isTyping ? "1" : "0";
+                if (data.isTyping) {
+                    typingIndicator.innerText = `${conn.peer} печатает...`;
+                    typingIndicator.style.opacity = "1";
+                } else {
+                    typingIndicator.style.opacity = "0";
+                }
             }
             return;
         }
@@ -113,13 +138,11 @@ function setupConnection(conn) {
             return;
         }
 
-        // Прием сообщений
         if (connections[conn.peer]?.isAccepted) {
             let isImg = !!(data.image || data.isImage);
             let isAud = !!(data.audio || data.isAudio);
             let content = data.text || data.image || data.audio;
             
-            // СЧЕТЧИК НЕПРОЧИТАННЫХ
             if (activePeerId !== conn.peer) {
                 connections[conn.peer].unreadCount = (connections[conn.peer].unreadCount || 0) + 1;
             }
@@ -162,7 +185,6 @@ function showIncomingAlert(conn, data) {
             if (data.avatar) currentConn.peerAvatar = data.avatar;
             currentConn.send({ type: 'handshake-ok', from: myUserName, avatar: myAvatar });
             
-            // ЕСЛИ БЫЛО ВЛОЖЕННОЕ СООБЩЕНИЕ
             const pMsg = currentConn.pendingMsgData;
             if (pMsg) {
                 saveMessage(pMsg.user, pMsg.text, 'peer-msg', pMsg.msgId, false, false, conn.peer);
@@ -189,7 +211,6 @@ function showIncomingAlert(conn, data) {
     };
 }
 
-// --- ОТПРАВКА ---
 function sendMessage() {
     const text = messageInput.value.trim();
     if (!text || !activePeerId) return;
@@ -204,7 +225,6 @@ function sendMessage() {
 
     let conn = connections[activePeerId];
 
-    // АВТО-ЗАПРОС С СООБЩЕНИЕМ
     if (!conn || !conn.open || !conn.isAccepted) {
         if (!conn || !conn.open) {
             conn = peer.connect(activePeerId, { reliable: true });
@@ -238,7 +258,6 @@ function sendMessage() {
     messageInput.value = '';
 }
 
-// --- ФУНКЦИИ МЕДИА ---
 function uploadChatImage(input) {
     const file = input.files[0];
     if (!file) return;
@@ -302,7 +321,6 @@ function sendAudio(base64) {
     }
 }
 
-// --- ИНТЕРФЕЙС ---
 function addMessage(user, content, className, id, isImg, isAud) {
     const div = document.createElement('div');
     div.className = `msg ${className}`;
@@ -455,13 +473,18 @@ function uploadAvatar(input) {
 
 function sendTypingStatus() {
     const conn = connections[activePeerId];
-    if (conn?.isAccepted) {
+    if (conn && conn.open && conn.isAccepted) {
         conn.send({ type: 'typing', isTyping: true });
         clearTimeout(typingTimer);
-        typingTimer = setTimeout(() => { if(connections[activePeerId]) connections[activePeerId].send({ type: 'typing', isTyping: false }) }, 2000);
+        typingTimer = setTimeout(() => { 
+            if(connections[activePeerId] && connections[activePeerId].open) {
+                connections[activePeerId].send({ type: 'typing', isTyping: false });
+            }
+        }, 2000);
     }
 }
 
 init();
 messageInput.addEventListener("keypress", (e) => { if (e.key === "Enter") sendMessage(); });
+messageInput.addEventListener("input", sendTypingStatus); // Важно!
 peerInput.addEventListener("keypress", (e) => { if (e.key === "Enter") connectToPeer(); });
