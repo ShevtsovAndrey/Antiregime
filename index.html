@@ -14,7 +14,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>P2P Messenger Andrey v4.0</title>
+    <title>AntiRegime P2P Messenger</title>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <style>
         body {
@@ -25,6 +25,9 @@
     box-sizing: border-box;
 }
 
+#connection-info {
+    top: calc(10px + env(safe-area-inset-top)) !important;
+}
 #auth-server {
     /* Дополнительный отступ сверху для панели управления */
     padding-top: calc(15px + env(safe-area-inset-top));
@@ -79,7 +82,6 @@
     font-style: italic; 
     box-shadow: none !important;
 }
-
 /* Добавим маленькую иконку часиков перед текстом черновика (по желанию) */
 .pending-msg::before {
     content: "🕒 ";
@@ -89,6 +91,12 @@
     </style>
 </head>
 <body>
+    
+    <div id="connection-info" style="position: fixed; top: 10px; left: 10px; z-index: 9999; background: rgba(0,0,0,0.7); color: #68afaf; padding: 6px 10px; border-radius: 5px; font-size: 10px; font-family: monospace; pointer-events: none; border: 1px solid #444; line-height: 1.4;">
+    <div id="info-device">Устройство: Detecting...</div>
+    <div id="info-net">Сеть: Checking...</div>
+    <div id="info-ip">IP: Fetching...</div>
+</div>
     <div id="auth-server">
         <div class="controls-row">
             <div class="input-group"><label>Ваш ID:</label><input type="text" id="my-id-input" placeholder="Напр. Andrey"></div>
@@ -100,9 +108,9 @@
                 <input type="file" id="avatar-upload" accept="image/*" style="display: none;" onchange="uploadAvatar(this)">
                 <button class="main-btn" style="background: #555; color: white; font-size: 11px;" onclick="document.getElementById('avatar-upload').click()">Фото профиля</button>
             </div>
-        </div>
+        </div> 
         <div class="controls-row">
-            <div class="input-group"><label>ID друга:</label><input type="text" id="peer-id-input" placeholder="Введите ник друга"></div>
+            <div class="input-group"><label>Поиск по ID:</label><input type="text" id="peer-id-input" placeholder="Введите ID"></div>
             <button class="main-btn" onclick="connectToPeer()">Чат</button>
         </div>
     </div>

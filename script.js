@@ -1,3 +1,40 @@
+ // Определение устройства с которого подключились
+async function updateConnectionStats() {
+    const deviceEl = document.getElementById('info-device');
+    const netEl = document.getElementById('info-net');
+    const ipEl = document.getElementById('info-ip');
+
+    // 1. Определение устройства
+    const ua = navigator.userAgent;
+    let device = "Неизвестное устройство";
+    if (/android/i.test(ua)) device = "Android";
+    else if (/iPad|iPhone|iPod/.test(ua)) device = "iOS";
+    else if (/Windows/i.test(ua)) device = "Windows";
+    deviceEl.innerText = `📱 Dev: ${device}`;
+
+    // 2. Определение сети (Тип соединения)
+    if (navigator.connection) {
+        const conn = navigator.connection;
+        const type = conn.effectiveType || "unknown"; // 4g, 3g, etc.
+        const saveData = conn.saveData ? " (Data Saver)" : "";
+        netEl.innerText = `🌐 Net: ${type.toUpperCase()}${saveData}`;
+    } else {
+        netEl.innerText = `🌐 Net: Browser limited`;
+    }
+
+    // 3. Получение IP адреса (через внешний API)
+    try {
+        const response = await fetch('https://api.ipify.org?format=json');
+        const data = await response.json();
+        ipEl.innerText = `📍 IP: ${data.ip}`;
+    } catch (e) {
+        ipEl.innerText = `📍 IP: Ошибка получения IP`;
+    }
+}
+
+// Запускаем обновление при загрузке
+updateConnectionStats();
+
 let peer, mediaRecorder, typingTimer;
 let connections = {}; 
 let activePeerId = null; 
@@ -28,41 +65,49 @@ peerInput.addEventListener("keypress", (e) => { if (e.key === "Enter") connectTo
 // Вкладка "Заметки" (всегда первая)
 function initNotes() {
     let list = JSON.parse(localStorage.getItem('p2p_chat_list') || '[]');
-    if (!list.includes('Заметки (Self)')) {
-        list.unshift('Заметки (Self)');
+    if (!list.includes('Архив')) {
+        list.unshift('Архив');
         localStorage.setItem('p2p_chat_list', JSON.stringify(list));
     }
     refreshTabs();
 }
 
 function startPeer(id) {
-    if (peer) { peer.destroy(); }
-    peer = new Peer(id, { debug: 1 });
+    if (peer) { 
+        peer.destroy(); 
+    }
+    
+    // Настройки специально для GitHub Pages (HTTPS)
+    peer = new Peer(id, {
+        host: '0.peerjs.com', // Используем официальный облачный сервер
+        port: 443,
+        secure: true,         // Обязательно true для работы по HTTPS
+        debug: 1,             // 1 - только ошибки, 3 - полный лог в консоли
+        config: {
+            'iceServers': [
+                { urls: 'stun:stun.l.google.com:19302' }, // Помогает обходить NAT и роутеры
+                { urls: 'stun:stun1.l.google.com:19302' }
+            ]
+        }
+    });
 
     peer.on('open', (newId) => { 
-        addSystemMessage(`Вы онлайн: ${newId}`); 
+        console.log('Подключено к серверу сигнализации. Ваш ID:', newId);
+        addSystemMessage(`Ваш ник: ${newId}`); 
         refreshTabs(); 
         restoreConnections(); 
     });
 
-    peer.on('connection', (conn) => setupConnection(conn));
+    peer.on('connection', (conn) => {
+        console.log('Запрос подключения от:', conn.peer);
+        setupConnection(conn);
+    });
 
     peer.on('error', (err) => { 
-        if (err.type === 'unavailable-id') alert("Этот ID уже занят!"); 
-        if (err.type === 'peer-unavailable') addSystemMessage("Пользователь не найден");
-    });
-}
-
-function connectToPeer() {
-    const id = peerInput.value.trim();
-    if (!id || id === myUserName || id === 'Заметки (Self)') return alert("Некорректный ID");
-
-    addSystemMessage(`Подключение к ${id}...`);
-    const conn = peer.connect(id, { reliable: true });
-    
-    conn.on('open', () => {
-        conn.send({ type: 'request-chat', from: myUserName, avatar: myAvatar });
-        setupConnection(conn);
+        console.error('Ошибка PeerJS:', err.type, err);
+        if (err.type === 'unavailable-id') alert("ID уже используется на сервере."); 
+        if (err.type === 'peer-unavailable') addSystemMessage("ID не в сети");
+        if (err.type === 'network') addSystemMessage("Проблема подключения");
     });
 }
 
@@ -112,7 +157,7 @@ function sendMessage() {
 
     const id = Date.now();
     // Если это заметки - просто сохраняем локально
-    if (activePeerId === 'Заметки (Self)') {
+    if (activePeerId === 'Архив') {
         addMessage('Я', text, 'my-msg', id, false, false);
         saveMessage('Я', text, 'my-msg', id, false, false, activePeerId, false);
         messageInput.value = ''; return;
@@ -224,7 +269,7 @@ function refreshTabs() {
     tabsContainer.innerHTML = '';
     let list = JSON.parse(localStorage.getItem('p2p_chat_list') || '[]');
     list.forEach(id => {
-        const isNotes = id === 'Заметки (Self)';
+        const isNotes = id === 'Архив';
         const isOnline = !isNotes && (connections[id] && connections[id].open);
         const tab = document.createElement('div');
         tab.className = `tab ${id === activePeerId ? 'active' : ''}`;
@@ -340,7 +385,7 @@ function resizeImage(file, maxW, maxH, q, cb) {
 function restoreConnections() {
     let list = JSON.parse(localStorage.getItem('p2p_chat_list') || '[]');
     list.forEach(id => {
-        if (id === 'Заметки (Self)') return;
+        if (id === 'Архив') return;
         const conn = peer.connect(id);
         conn.on('open', () => {
             conn.send({ type: 'reconnect-ping', from: myUserName, avatar: myAvatar });
