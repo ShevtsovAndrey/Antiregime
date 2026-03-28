@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-    <link rel="stylesheet" href="style.css">
+        <link rel="stylesheet" href="style.css">
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>AntiRegime P2P Messenger</title>
@@ -25,16 +25,17 @@
                 <input type="file" id="avatar-upload" accept="image/*" style="display: none;" onchange="uploadAvatar(this)">
                 
                 <div class="input-group">
-                    <label>Мой Nickname:</label>
-                    <input type="text" id="my-id-input" placeholder="Ник...">
+                    <label>Ваш ID:</label>
+                    <input type="text" id="my-id-input" placeholder="Введите ваш ID сюда...">
                 </div>
                 <button class="main-btn" style="padding: 8px 12px; font-size: 12px;" onclick="changeMyId()">OK</button>
             </div>
 
             <div id="connection-info">
-                <div id="info-device">SYS: ...</div>
-                <div id="info-net">NET: ...</div>
+                <div id="info-device">СИСТЕМА: ...</div>
+                <div id="info-net">СЕТЬ: ...</div>
                 <div id="info-ip">IP: ...</div>
+                <button onclick="rebootMessenger()" id="reboot-btn" title="Перезагрузить соединения">🔄</button>
             </div>
         </div>
 

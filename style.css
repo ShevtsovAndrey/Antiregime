@@ -53,6 +53,24 @@ body {
     gap: 10px;
 }
 
+/* КНОПКА ПЕРЕЗАГРУЗКИ */
+
+#reboot-btn {
+    background: var(--accent); /* Твой акцентный цвет */
+    border: none;
+    color: white;
+    padding: 2px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+    margin-left: 10px;
+    transition: transform 0.2s ease;
+}
+
+#reboot-btn:active {
+    transition: transform 0.2s ease;
+}
+
 .profile-form-group {
     display: flex;
     align-items: center;

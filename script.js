@@ -54,6 +54,42 @@ function init() {
     openChat('Архив');
 }
 
+
+// --- ПЕРЕЗАГРУЗКА---
+
+function rebootMessenger() {
+    console.log("Rebooting messenger components...");
+    
+    // 1. Закрываем все активные соединения P2P
+    if (connections) {
+        Object.values(connections).forEach(conn => {
+            if (conn && conn.close) conn.close();
+        });
+    }
+    connections = {};
+
+    // 2. Уничтожаем объект Peer, чтобы освободить ID на сервере
+    if (peer) {
+        peer.disconnect();
+        peer.destroy();
+    }
+
+    // 3. Визуальная индикация в консоль/чат
+    addSystemMessage("🔄 Перезагрузка скриптов");
+
+    // 4. Задержка в полсекунды, чтобы PeerJS успел корректно закрыть сокет
+    setTimeout(() => {
+        // Заново инициализируем Peer с тем же ником
+        startPeer(myUserName);
+        // Обновляем статистику сети
+        updateConnectionStats();
+        // Сбрасываем активный чат на Архив для безопасности
+        openChat('Архив');
+        addSystemMessage("✅ Скрипты перезапущены");
+    }, 500);
+}
+
+
 // --- ОБНОВЛЕННАЯ ФУНКЦИЯ ИНИЦИАЛИЗАЦИИ PEER ---
 function startPeer(id) {
     if (peer) { peer.off('connection'); peer.destroy(); }
@@ -80,7 +116,7 @@ function startPeer(id) {
     });
 
     peer.on('open', (newId) => { 
-        addSystemMessage(`Вы в сети: ${newId}`); 
+        addSystemMessage(`Вы в сети как "${newId}"`); 
         refreshTabs(); 
     });
 
