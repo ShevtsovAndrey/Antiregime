@@ -319,6 +319,25 @@ input[type="text"] {
 
 @keyframes pulse-rec { 0% { opacity: 1; } 50% { opacity: 0.6; } 100% { opacity: 1; } }
 
+#auth-overlay {
+    background: #00000010; /* Глубокий темный */
+    backdrop-filter: blur(4px);
+    position: fixed; 
+    inset: 0; 
+    z-index: 9999; 
+    display: flex; 
+    align-items: center; 
+    justify-content: center;
+}
+
+#auth-overlay .profile-form-group {
+    border: 2px solid var(--accent); /* Твой основной цвет */
+    box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+    background: #1a1a1a;
+    border-radius: 15px;
+}
+
+
 /* МЕДИА */
 .chat-img { max-width: 100%; border-radius: 8px; cursor: pointer; margin-top: 5px; }
 #lightbox { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.9); z-index: 2000; justify-content: center; align-items: center; }

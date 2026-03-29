@@ -1,20 +1,53 @@
+// ФУНКЦИЯ ЗАГРУЗКИ ПРОФИЛЯ ПО ID
+//let myUserName = localStorage.getItem('p2p_nickname') || null;
+window.confirmIdentity = function() {
+    const inp = document.getElementById('initial-id-input');
+    const val = inp ? inp.value.trim() : null;
+
+    if (!val) {
+        alert("Поле ID не может быть пустым"); 
+        return;
+    }
+
+    // 1. Сохраняем имя пользователя
+    myUserName = val;
+    localStorage.setItem('p2p_nickname', myUserName);
+    
+    // 2. Скрываем окно авторизации
+    const overlay = document.getElementById('auth-overlay');
+    if (overlay) overlay.style.display = 'none';
+    
+    // 3. КРИТИЧЕСКИЙ МОМЕНТ: Инициализируем пространство данных ДО запуска сети
+    // Это создаст нужные ключи в localStorage для конкретного юзера (User1, User2 и т.д.)
+    if (typeof Storage !== 'undefined' && Storage.initUserSpace) {
+        Storage.initUserSpace();
+    }
+    
+    // 4. Запускаем сетевой модуль (PeerJS)
+    // В твоем файле функция называется preinit, вызываем её
+    if (typeof preinit === 'function') {
+        preinit(); 
+    } else if (typeof initPeer === 'function') {
+        initPeer();
+    }
+    
+    // 5. Логируем успех
+    if (typeof addlog === 'function') {
+        addlog(`✅ Вы вошли как: ${myUserName}`);
+    }
+};
+
+// В начале script.js убираем авто-присвоение ника из localStorage, если хотим ПРИНУДИТЕЛЬНЫЙ ввод
+
 // --- ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ---
-
 let activePeerId = null;
-
 let typingTimer;
-
 let mediaRecorder;
-
 let audioChunks = [];
-
 let isRecording = false;
 
 
-
 // Извлекаем базовые настройки профиля
-
-let myUserName = localStorage.getItem('p2p_nickname') || "User_" + Math.floor(Math.random() * 1000);
 
 let myAvatar = localStorage.getItem('p2p_avatar') || null;
 
@@ -23,72 +56,62 @@ let myAvatar = localStorage.getItem('p2p_avatar') || null;
 // Элементы DOM
 
 const chatWindow = document.getElementById('chat-window');
-
 const tabsContainer = document.getElementById('chat-tabs');
-
 const messageInput = document.getElementById('message-input');
-
 const peerInput = document.getElementById('peer-id-input');
-
 const typingIndicator = document.getElementById('typing-indicator');
 
-
-
 // --- ИНИЦИАЛИЗАЦИЯ ---
-
 function init() {
+    console.log("🚀 Система ожидает авторизации...");
+    
+    const overlay = document.getElementById('auth-overlay');
+    const savedNick = localStorage.getItem('p2p_nickname');
 
-    // 1. Умный запрос уведомлений (только если решение еще не принято)
-
-    if (window.Notification && Notification.permission === 'default') {
-
-        Notification.requestPermission().then(permission => {
-
-            if (permission === 'granted') {
-
-                addSystemMessage("🔔 Уведомления включены");
-
-            }
-
-        });
-
+    // Если хочешь, чтобы окно ВООБЩЕ не пропадало само при перезагрузке:
+    // Просто оставь overlay.style.display = 'flex' и убери блок if(savedNick)
+    
+    if (savedNick) {
+        myUserName = savedNick;
+        if (overlay) overlay.style.display = 'none'; // Скрываем, если уже входили
+        preinit();
+    } else {
+        if (overlay) overlay.style.display = 'flex'; // Показываем, если первый раз
     }
+}
 
-   
+// Основной запуск приложения ПОСЛЕ того, как ник известен
+function preinit() {
+    console.log(`📡 Запуск для пользователя: ${myUserName}`);
 
-    // Настройка поля ввода своего ID
-
+    // Инициализируем хранилище (Storage подставит префикс ника к ключам)
+    if (typeof Storage !== 'undefined') {
+        // Гарантируем наличие Архива
+        Storage.initUserSpace(); 
+    }
+    // Запуск сети
+    if (typeof startPeer === 'function') startPeer(myUserName);
+    // Отрисовка
+    if (typeof refreshTabs === 'function') {
+        refreshTabs();
+        openChat('Архив'); // Теперь данные точно подгрузятся под этот ник
+    }
+    
+    // Обновляем инфу в шапке (твой блок ID)
     const myIdInp = document.getElementById('my-id-input');
-
-    if (myIdInp) {
-
-        myIdInp.value = myUserName;
-
-        myIdInp.addEventListener('keypress', (e) => { if (e.key === 'Enter') changeMyId(); });
-
-    }
-
-
-
-    if (myAvatar) updateAvatarPreview(myAvatar);
-
-
-
-    // Запуск PeerJS (из network.js)
-
-    startPeer(myUserName);
-
-   
-
-    // Загрузка интерфейса текущего пользователя через Storage
-
-    refreshTabs();
-
-    openChat('Архив');
-
+    if (myIdInp) myIdInp.value = myUserName;
 }
 
 
+window.clearAppState = function() {
+    activePeerId = null; // Сбрасываем активный чат
+    connections = {};    // Очищаем старые коннекты
+    const tabs = document.getElementById('chat-tabs');
+    const window = document.getElementById('chat-window');
+    if (tabs) tabs.innerHTML = '';      // Чистим вкладки визуально
+    if (window) window.innerHTML = '';  // Чистим окно чата визуально
+    addlog("🧹 Память очищена для нового пользователя");
+};
 
 // --- ОТПРАВКА СООБЩЕНИЙ ---
 
@@ -103,30 +126,24 @@ function sendMessage() {
 
 
     // Логика для Архива (Заметки самому себе)
+    // Система проверяет - если вкладка "Архив" активна, то сообщения будут отправляться минуя соединение
+
 
     if (activePeerId === 'Архив') {
-
         saveMessage(myUserName, text, 'my-msg', msgId, false, false, 'Архив');
-
         addMessage(myUserName, text, 'my-msg', msgId, false, false);
-
         messageInput.value = '';
-
         return;
 
     }
 
-
-
     let conn = connections[activePeerId];
-
-
 
     // Проверка состояния соединения
 
     if (!conn || !conn.open) {
 
-        addSystemMessage(`🔍 Канал с ${activePeerId} закрыт. Восстановление...`);
+        addlog(`🔍 Канал с ${activePeerId} закрыт. Восстановление...`);
 
         if (typeof reconnectToID === 'function') reconnectToID(activePeerId);
 
@@ -134,17 +151,13 @@ function sendMessage() {
 
     }
 
-
-
     if (!conn.isAccepted) {
 
-        addSystemMessage(`⏳ Ожидание подтверждения от ${activePeerId}...`);
+        addlog(`⏳ Ожидание подтверждения от ${activePeerId}...`);
 
         return;
 
     }
-
-
 
     try {
 
@@ -166,7 +179,7 @@ function sendMessage() {
 
     } catch (e) {
 
-        addSystemMessage(`❌ Ошибка отправки: ${e.message}`);
+        addlog(`❌ Ошибка отправки: ${e.message}`);
 
     }
 
@@ -346,7 +359,7 @@ function addMessage(user, content, className, id, isImg, isAud) {
 
 
 
-function addSystemMessage(t) {
+function addlog(t) {
 
     const d = document.createElement('div');
 
@@ -420,7 +433,7 @@ function openChat(pId, shouldFocus = true) {
 
         if (pId !== 'Архив' && (!connections[pId] || !connections[pId].open)) {
 
-            addSystemMessage(`🔎 Канал с ${pId} не активен.`);
+            addlog(`🔎 Канал с ${pId} не активен.`);
 
         }
 
@@ -673,35 +686,21 @@ function showIncomingAlert(conn, data) {
 
 
 function connectToPeer() {
-
     const id = peerInput.value.trim();
-
     if (!id) return;
-
-
 
     // ПРОВЕРКА: Если ввели свой же ID
 
     if (id === myUserName) {
-
         peerInput.value = '';
-
         openChat('Архив'); // Переносим в Архив
-
         triggerArchiveFlash(); // Запускаем мигание
-
-        addSystemMessage("📁 Это ваш ID. Добро пожаловать в Архив!");
-
+        addlog("Была совершена переадресация на собственный ID. Открыт Архив.");
         return;
 
     }
-
-   
-
     openChat(id, true);
-
     if (typeof reconnectToID === 'function') reconnectToID(id);
-
     peerInput.value = '';
 
 }
@@ -824,14 +823,11 @@ function changeMyId() {
 
     if (!newId || newId === myUserName) return;
 
-   
-
     myUserName = newId;
 
     localStorage.setItem('p2p_nickname', myUserName);
 
     // Перезагрузка страницы для инициализации Storage под новым ником
-
     location.reload();
 
 }
@@ -849,23 +845,27 @@ function updateAvatarPreview(src) {
 
 
 function uploadAvatar(input) {
+    const file = input.files[0];
+    if (!file) return;
 
-    if (!input.files[0]) return;
+    // Лимит 200 КБ, чтобы не забить localStorage
+    if (file.size > 200 * 1024) {
+        alert("Файл слишком большой! Выберите фото до 200 КБ.");
+        return;
+    }
 
     const reader = new FileReader();
-
     reader.onload = (e) => {
-
-        myAvatar = e.target.result;
-
-        localStorage.setItem('p2p_avatar', myAvatar);
-
-        updateAvatarPreview(myAvatar);
-
+        try {
+            myAvatar = e.target.result;
+            localStorage.setItem('p2p_avatar', myAvatar);
+            updateAvatarPreview(myAvatar);
+            addlog("✅ Аватар обновлен");
+        } catch (err) {
+            addlog("❌ Ошибка: Недостаточно места в памяти браузера");
+        }
     };
-
-    reader.readAsDataURL(input.files[0]);
-
+    reader.readAsDataURL(file);
 }
 
 
@@ -972,7 +972,7 @@ window.openLightbox = (src) => {
 
 
 
-// --- СТАРТ ПРИЛОЖЕНИЯ ---
+// --- ЗАПУСК ИНИЦИАЛИЗАЦИИ ---
 
 init();
 
@@ -981,7 +981,6 @@ init();
 // Слушатели событий
 
 messageInput.addEventListener("keypress", (e) => { if (e.key === "Enter") sendMessage(); });
-
 messageInput.addEventListener("input", sendTypingStatus);
-
 peerInput.addEventListener("keypress", (e) => { if (e.key === "Enter") connectToPeer(); });
+

@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="ru">
+
 <head>
         <link rel="stylesheet" href="style.css">
     <meta charset="UTF-8">
@@ -14,9 +15,22 @@
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     
 </head>
-
 <body>
     
+<!-- 1. ЗДЕСЬ МЫ СНАЧАЛА ЗАГРУЖАЕМ ДАННЫЕ ПОЛЬЗОВАТЕЛЯ, ВЫЗЫВАЕМ БЛОК С АВТОРИЗАЦИЕЙ -->
+
+<div id="auth-overlay">
+    <div class="profile-form-group" style="flex-direction: column; gap: 15px; padding: 30px; border: 1px solid var(--accent); width: 300px;">
+        <h2 style="color: var(--accent); margin: 0; font-size: 2vh;">Загрузка данных по IP</h2>
+        <input type="text" id="initial-id-input" placeholder="Введите ваш ID/Никнейм..." style="width: 100%; text-align: center;">
+        <button class="main-btn" onclick="confirmIdentity()" style="width: 100%;">Загрузить</button>
+        <label style=" text-align: center;">Важно! Если в вашем локальном хранилище ранее
+     не было загружено данных привязанных к вашему ID, то система не отобразит историю корректно. </label>
+    </div>
+</div>
+
+<!-- 2. ЗАТЕМ УЖЕ ЗАГРУЖАЕМ ОСТАЛЬНОЕ -->
+
     <div id="auth-server">
         <div class="top-bar">
             <div class="profile-form-group">
@@ -65,11 +79,11 @@
         <img id="lightbox-img" style="max-width:95%; max-height:95%; object-fit: contain;">
     </div>
 
-    <script src="script.js"></script>
-    <script src="chat_engine.js"></script>
 <script src="storage.js"></script>
 <script src="network.js"></script>
+<!--<script src="chat_engine.js"></script>-->
 <script src="logger.js"></script>
+<script src="script.js"></script>
 
 </body>
 </html>

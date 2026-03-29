@@ -1,8 +1,4 @@
-/**
- * LOGGER.JS - Модуль мониторинга и системных уведомлений
- * Основан на актуальной логике P2P мессенджера
- */
-
+// МОДУЛЬ СИСТЕМНОГО МОНИТОРИНГА 
 const Logger = {
     // Вывод в системный чат (то, что видит пользователь)
     logSystem(message, type = 'info') {
@@ -19,8 +15,8 @@ const Logger = {
         const formattedMsg = `${icon} ${message}`;
         
         // Вызываем твою основную функцию из основного скрипта
-        if (typeof addSystemMessage === 'function') {
-            addSystemMessage(formattedMsg);
+        if (typeof addlog === 'function') {
+            addlog(formattedMsg);
         }
         
         // Дублируем в консоль разработчика для дебага

@@ -56,107 +56,119 @@ function startPeer(id) {
     };
 
     peer = new Peer(id, config);
-    peer.on('connection', (conn) => { setupConnection(conn); });
     
+    // Входящие подключения (когда звонят НАМ)
+    peer.on('connection', (conn) => { 
+        conn.isOutbound = false; // Помечаем как входящее
+        setupConnection(conn); 
+    });
     
     peer.on('open', (newId) => { 
-        addSystemMessage(`🌐 Сеть готова. Ваш ID: ${newId}`); 
+        addlog(`🌐 Сеть готова. Ваш ID: ${newId}`); 
         refreshTabs(); 
     });
 
     peer.on('error', (err) => {
         if (typeof Logger !== 'undefined') Logger.logNetwork('error', err.type);
+        if (err.type === 'unavailable-id') {
+            addlog("❌ Этот ID уже занят");
+        }
     });
 }
 
-// Настройка входящего канала данных
+// Функция для кнопки "Чат" (исходящее соединение)
+function connectToPeer() {
+    const id = document.getElementById('peer-id-input').value.trim();
+    if (!id) return alert("Введите ID");
+    if (id === myUserName) return alert("Нельзя подключиться к самому себе");
+
+    addlog(`🌐 Установка связи с ${id}...`);
+    
+    const conn = peer.connect(id, { reliable: true });
+    conn.isOutbound = true; // Помечаем, что МЫ инициаторы
+    
+    setupConnection(conn);
+}
+
+// Настройка канала данных
 function setupConnection(conn) {
     if (conn.peer === myUserName) { conn.close(); return; }
-    if (connections[conn.peer]) connections[conn.peer].close();
-    
     connections[conn.peer] = conn;
-    connections[conn.peer].isAccepted = false;
-    connections[conn.peer].unreadCount = 0;
+
+    conn.on('open', () => {
+        // Отправляем запрос на чат ТОЛЬКО если мы инициаторы
+        if (conn.isOutbound) {
+            console.log(`[NET] Отправляем запрос контакту ${conn.peer}`);
+            conn.send({ type: 'request-chat', from: myUserName, avatar: myAvatar });
+        }
+        
+        // Синхронизацию запрашиваем в любом случае
+        const lastId = Storage.getLastMsgId(conn.peer);
+        conn.send({ type: 'sync-request', lastMsgId: lastId });
+    });
 
     conn.on('data', (data) => {
-        // Обработка PING-PONG
-        if (data.type === 'pong') {
-            const rtt = Date.now() - pingStartTimes[data.msgId];
-            if (typeof Logger !== 'undefined') Logger.logPing(data.msgId, rtt);
-            delete pingStartTimes[data.msgId];
-            return;
-        }
-
-        if (data.msgId && data.type === 'chat-msg') {
-            conn.send({ type: 'pong', msgId: data.msgId });
-        }
-
+        // --- ВАЖНО: УВЕДОМЛЕНИЕ О ЗАПРОСЕ ---
         if (data.type === 'request-chat') {
-            openChat(conn.peer, false); 
-            if (data.pendingMsg) conn.pendingMsgData = data.pendingMsg;
-            showIncomingAlert(conn, data);
+            // Показываем уведомление, только если это входящий запрос
+            // и мы еще не приняли этот чат ранее в этой сессии
+            if (!connections[conn.peer].isAccepted) {
+                console.log("Входящий запрос от:", data.from);
+                if (typeof showIncomingAlert === 'function') {
+                    showIncomingAlert(conn, data);
+                }
+            }
             return;
         }
 
-        if (data.type === 'handshake-ok') {
-            if (connections[conn.peer]) {
-                connections[conn.peer].isAccepted = true;
-                if (data.avatar) connections[conn.peer].peerAvatar = data.avatar;
-            }
-            addSystemMessage(`✅ ${conn.peer} принял запрос`);
+        // --- СИНХРОНИЗАЦИЯ ---
+        if (data.type === 'sync-request') {
+            const missing = Storage.getHistory(conn.peer).filter(m => m.id > data.lastMsgId);
+            if (missing.length > 0) conn.send({ type: 'sync-data', messages: missing });
+            return;
+        }
+
+        if (data.type === 'sync-data') {
+            data.messages.forEach(m => {
+                Storage.saveMessage(m.user, m.text, m.className, m.id, !!m.isImage, !!m.isAudio, conn.peer);
+            });
+            if (activePeerId === conn.peer) loadHistory();
             refreshTabs();
             return;
         }
 
-        if (data.type === 'typing') {
+        // --- ОБЫЧНЫЕ СООБЩЕНИЯ ---
+        if (data.type === 'chat-msg') {
+            Storage.saveMessage(data.user || conn.peer, data.text, 'peer-msg', data.msgId, !!data.isImage, !!data.isAudio, conn.peer);
             if (activePeerId === conn.peer) {
-                typingIndicator.style.opacity = data.isTyping ? "1" : "0";
-                if (data.isTyping) typingIndicator.innerText = `${conn.peer} печатает...`;
-            }
-            return;
-        }
-
-        if (data.type === 'delete') { removeData(data.msgId); return; }
-
-        // Прием контента
-        if (data.type === 'chat-msg' || data.image || data.audio) {
-            let isImg = !!(data.image || data.isImage);
-            let isAud = !!(data.audio || data.isAudio);
-            let content = data.text || data.image || data.audio;
-            
-            if (activePeerId !== conn.peer) {
-                if (!connections[conn.peer]) connections[conn.peer] = conn;
+                addMessage(data.user || conn.peer, data.text, 'peer-msg', data.msgId, data.isImage, data.isAudio);
+            } else {
                 connections[conn.peer].unreadCount = (connections[conn.peer].unreadCount || 0) + 1;
-            }
-            
-            saveMessage(data.user || conn.peer, content, 'peer-msg', data.msgId, isImg, isAud, conn.peer);
-            if (activePeerId === conn.peer) {
-                addMessage(data.user || conn.peer, content, 'peer-msg', data.msgId, isImg, isAud);
             }
             refreshTabs();
         }
     });
 
     conn.on('close', () => {
-        addSystemMessage(`❌ Потеряно соединение с ${conn.peer}`);
-        if (connections[conn.peer]) connections[conn.peer].isAccepted = false;
+        addlog(`❌ Соединение с ${conn.peer} закрыто`);
         refreshTabs();
     });
 }
 
 function reconnectToID(id) {
-    if (id === 'Архив') return;
+    if (id === 'Архив' || !id) return;
     const conn = peer.connect(id, { reliable: true });
+    
+    conn.isOutbound = true; 
+    conn.isSilentReconnect = true; // Флаг, чтобы не спамить алертами при авто-подключении
+    
     setupConnection(conn);
-    conn.on('open', () => {
-        conn.send({ type: 'request-chat', from: myUserName, avatar: myAvatar });
-    });
 }
 
 function rebootMessenger() {
     const btn = document.getElementById('reboot-btn');
     if (btn) btn.style.transform = "rotate(360deg)";
-    addSystemMessage("🔄 Перезапуск модулей связи...");
+    addlog("🔄 Перезапуск модулей связи...");
     
     Object.values(connections).forEach(c => { if(c) c.close(); });
     connections = {};
@@ -165,7 +177,7 @@ function rebootMessenger() {
     setTimeout(() => {
         startPeer(myUserName);
         if (btn) btn.style.transform = "rotate(0deg)";
-        addSystemMessage("✅ Система онлайн");
+        addlog("✅ Система онлайн");
     }, 1000);
 }
 
